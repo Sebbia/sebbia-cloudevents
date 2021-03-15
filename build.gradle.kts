@@ -11,7 +11,7 @@ plugins {
 val kotlinVersion: String by project
 
 subprojects {
-    group = "com.sebbia"
+    group = "com.sebbia.cloudevents"
     version = "0.0.1"
 
     apply(plugin = "java-library")
@@ -23,7 +23,7 @@ subprojects {
         targetCompatibility = JavaVersion.VERSION_1_8
     }
 
-    tasks.withType<Jar>() {
+    tasks.withType<Jar> {
         archiveBaseName.set(rootProject.name + "-" + archiveBaseName.get())
     }
 
@@ -35,7 +35,7 @@ subprojects {
         publications {
             create<MavenPublication>("maven") {
                 groupId = group as String
-                artifactId = rootProject.name
+                artifactId = project.name
                 version = version
                 from(components["java"])
             }
@@ -57,8 +57,8 @@ subprojects {
     }
 
     dependencies {
-//    api("org.jooq", "jooq", "3.12.3")
-        implementation(kotlin("stdlib-jdk8", kotlinVersion))
+        implementation(kotlin("stdlib-jdk8"))
+        testImplementation(kotlin("test-junit"))
     }
 
     kotlin.sourceSets["main"].kotlin.srcDirs("src")
