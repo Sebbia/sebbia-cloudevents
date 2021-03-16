@@ -2,7 +2,8 @@ rootProject.name = "sebbia-cloudevents"
 
 listOf(
     "core",
-    "json-serializer"
+    "json-serializer",
+    "nats"
 ).forEach {
     include(":$it")
     project(":$it").apply {
