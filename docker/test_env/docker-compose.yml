@@ -4,3 +4,9 @@ services:
     image: nats-streaming:0.21.1-alpine3.13
     ports:
       - 4222:4222
+    command: -cid some-cluster -store file -dir /datastore
+    volumes:
+      - store:/datastore
+
+volumes:
+  store:

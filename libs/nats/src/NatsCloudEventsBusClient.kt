@@ -1,30 +1,39 @@
 import com.sebbia.cloudevents.core.CloudEvent
 import com.sebbia.cloudevents.core.CloudEventsBusClient
 import com.sebbia.cloudevents.core.CloudEventsSerializer
-import com.sebbia.cloudevents.core.Subscription
+import com.sebbia.cloudevents.core.CloudEventsSubscription
 import io.nats.streaming.Options
 import io.nats.streaming.StreamingConnection
 import io.nats.streaming.StreamingConnectionFactory
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.runBlocking
+import io.nats.streaming.SubscriptionOptions
+
+data class NatsSubscriptionOptions(
+    val subject: String,
+    val durableName: String? = null,
+    val deliverAllAvailable: Boolean? = null,
+    val maxInFlight: Int? = null
+)
 
 class NatsCloudEventsBusClient(
     natsUrl: String,
     clusterId: String,
     clientId: String,
+    private val subscriptionOptions: List<NatsSubscriptionOptions>? = null,
     private val serializer: CloudEventsSerializer
 ) : CloudEventsBusClient, AutoCloseable {
 
     private val connection: StreamingConnection
 
-    private class SubscriptionImpl<T>(
-        val subscription: io.nats.streaming.Subscription,
-        override val flow: Flow<T>
-    ) : Subscription<T> {
+    private class SubscriptionImpl(
+        val subscription: io.nats.streaming.Subscription
+    ) : CloudEventsSubscription {
+
         override fun close() {
-            subscription.close(true)
+            subscription.close(false)
+        }
+
+        override fun unsubscribe() {
+            subscription.unsubscribe()
         }
     }
 
@@ -44,16 +53,21 @@ class NatsCloudEventsBusClient(
         }
     }
 
-    override fun subscribe(subject: String): Subscription<CloudEvent> {
-        val flow = MutableSharedFlow<CloudEvent>()
-        val subscription = connection.subscribe(subject) { message ->
-            val cloudEventMessages = serializer.deserialize(message.data)
-            runBlocking {
-                cloudEventMessages.forEach { flow.emit(it) }
-            }
-            message.ack()
+    override fun subscribe(subject: String, handler: (CloudEvent) -> Unit): CloudEventsSubscription {
+        val opts = subscriptionOptions?.find { it.subject == subject }?.let { opts ->
+            SubscriptionOptions.Builder().apply {
+                opts.durableName?.let { durableName(it) }
+                opts.deliverAllAvailable?.let { if (it) deliverAllAvailable() }
+                opts.maxInFlight?.let { maxInFlight(it) }
+            }.build()
         }
-        return SubscriptionImpl(subscription, flow.asSharedFlow())
+
+        val subscription = connection.subscribe(subject, { message ->
+            val cloudEventMessages = serializer.deserialize(message.data)
+            cloudEventMessages.forEach { handler(it) }
+            message.ack()
+        }, opts)
+        return SubscriptionImpl(subscription)
     }
 
     override fun close() {
