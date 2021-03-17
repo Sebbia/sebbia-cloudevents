@@ -1,8 +1,11 @@
 import com.sebbia.cloudevents.core.CloudEvent
+import com.sebbia.cloudevents.core.CloudEventsBusClient
+import com.sebbia.cloudevents.core.CloudEventsSubscription
 import com.sebbia.cloudevents.json.CloudEventsJsonSerializer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 suspend fun waitForTrue(timeoutMs: Int = 10000, block: () -> Boolean) {
@@ -18,17 +21,26 @@ class ClientTest {
 
     private val serializer = CloudEventsJsonSerializer()
 
-    private fun runWithClient(
+    private fun createClient(
         clientId: String? = null,
-        opts: List<NatsSubscriptionOptions>? = null,
-        block: (NatsCloudEventsBusClient) -> Unit
-    ) {
+        opts: NatsSubscriptionOptions? = null
+    ): CloudEventsBusClient =
         NatsCloudEventsBusClient(
             natsUrl = "nats://localhost:4222",
             clusterId = "some-cluster",
             clientId = clientId ?: "client",
-            subscriptionOptions = opts,
+            subscriptionOptions = listOfNotNull(opts),
             serializer = serializer
+        )
+
+    private fun runWithClient(
+        clientId: String? = null,
+        opts: NatsSubscriptionOptions? = null,
+        block: (CloudEventsBusClient) -> Unit
+    ) {
+        createClient(
+            clientId = clientId,
+            opts = opts
         ).use { client ->
             block(client)
         }
@@ -75,14 +87,12 @@ class ClientTest {
         runWithClient(clientId = "sender") { sender ->
             runWithClient(
                 clientId = "receiver",
-                opts = listOf(
-                    NatsSubscriptionOptions(
-                        subject = subjectName,
-                        durableName = "durable_subject",
-                        // first run deliver all available events in que
-                        // second run durable pointer used to read events
-                        deliverAllAvailable = true
-                    )
+                opts = NatsSubscriptionOptions(
+                    subject = subjectName,
+                    durableName = "durable_subject",
+                    // first run deliver all available events in que
+                    // second run durable pointer used to read events
+                    deliverAllAvailable = true
                 )
             ) { receiver ->
 
@@ -110,6 +120,59 @@ class ClientTest {
                     }
                 }
             }
+        }
+    }
+
+    @Test
+    fun `Load balanced event processing`() {
+        var sender: CloudEventsBusClient? = null
+        var receiver1: CloudEventsBusClient? = null
+        var receiver2: CloudEventsBusClient? = null
+        var subscription1: CloudEventsSubscription? = null
+        var subscription2: CloudEventsSubscription? = null
+        try {
+            val subject = "queued_subject"
+            val queueName = "receiver_pool"
+
+            sender = createClient(clientId = "que_sender")
+            receiver1 = createClient(
+                clientId = "que_receiver1",
+                opts = NatsSubscriptionOptions(subject = subject, queueName = queueName)
+            )
+            receiver2 = createClient(
+                clientId = "que_receiver2",
+                opts = NatsSubscriptionOptions(subject = subject, queueName = queueName)
+            )
+
+            val collected1 = mutableListOf<CloudEvent>()
+            val collected2 = mutableListOf<CloudEvent>()
+
+            subscription1 = receiver1.subscribe(subject) {
+                collected1.add(it)
+            }
+            subscription2 = receiver2.subscribe(subject) {
+                collected2.add(it)
+            }
+
+            for (i in 1..4) {
+                sender.publish(subject, listOf(baseEvent.copy(id = i.toString())))
+            }
+
+            runBlocking {
+                waitForTrue {
+                    collected1.size + collected2.size == 4
+                }
+            }
+
+            assertEquals("1,3", collected1.joinToString(",") { it.id })
+            assertEquals("2,4", collected2.joinToString(",") { it.id })
+
+        } finally {
+            subscription1?.close()
+            subscription2?.close()
+            receiver1?.close()
+            receiver2?.close()
+            sender?.close()
         }
     }
 }

@@ -11,7 +11,8 @@ data class NatsSubscriptionOptions(
     val subject: String,
     val durableName: String? = null,
     val deliverAllAvailable: Boolean? = null,
-    val maxInFlight: Int? = null
+    val maxInFlight: Int? = null,
+    val queueName: String? = null // load balancing clients in the same que
 )
 
 class NatsCloudEventsBusClient(
@@ -20,7 +21,7 @@ class NatsCloudEventsBusClient(
     clientId: String,
     private val subscriptionOptions: List<NatsSubscriptionOptions>? = null,
     private val serializer: CloudEventsSerializer
-) : CloudEventsBusClient, AutoCloseable {
+) : CloudEventsBusClient {
 
     private val connection: StreamingConnection
 
@@ -54,7 +55,10 @@ class NatsCloudEventsBusClient(
     }
 
     override fun subscribe(subject: String, handler: (CloudEvent) -> Unit): CloudEventsSubscription {
-        val opts = subscriptionOptions?.find { it.subject == subject }?.let { opts ->
+
+        val userOptions = subscriptionOptions?.find { it.subject == subject }
+
+        val opts = userOptions?.let { opts ->
             SubscriptionOptions.Builder().apply {
                 opts.durableName?.let { durableName(it) }
                 opts.deliverAllAvailable?.let { if (it) deliverAllAvailable() }
@@ -62,7 +66,7 @@ class NatsCloudEventsBusClient(
             }.build()
         }
 
-        val subscription = connection.subscribe(subject, { message ->
+        val subscription = connection.subscribe(subject, userOptions?.queueName, { message ->
             val cloudEventMessages = serializer.deserialize(message.data)
             cloudEventMessages.forEach { handler(it) }
             message.ack()
